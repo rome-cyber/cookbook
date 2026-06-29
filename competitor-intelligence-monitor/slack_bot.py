@@ -5,8 +5,6 @@ Runs as a standalone service — separate from the daily GitHub Actions agent.
 Required env vars:
   SLACK_BOT_TOKEN         (same as agent)
   SLACK_SIGNING_SECRET    (Slack App > Basic Information > App Credentials)
-  GOOGLE_SHEET_ID         (same as agent)
-  GOOGLE_SHEETS_CREDENTIALS (base64-encoded service account JSON)
 """
 
 import os

@@ -1,7 +1,6 @@
 import os
 import re
 import json
-import base64
 import requests
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -13,8 +12,6 @@ from dotenv import load_dotenv
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 import anthropic
-import gspread
-from google.oauth2.service_account import Credentials
 from langgraph.graph import StateGraph, START, END
 from langgraph.types import Send
 from typing_extensions import TypedDict
@@ -43,105 +40,13 @@ for _c in _CONFIG["competitors"]:
 
 COMPETITOR_ALIASES[YOUR_COMPANY] = YOUR_COMPANY_ALIASES
 
-WEEKLY_DIGEST_HEADERS = (
-    ["Date", "Week Of", "Overview", "Signal of Week", "Signal URL"] +
-    list(COMPETITOR_ALIASES.keys())
-)
-
 NIMBLE_API_KEY = os.getenv("NIMBLE_API_KEY")
 GITHUB_TOKEN = os.getenv("GH_API_KEY")
 SLACK_TOKEN = os.getenv("SLACK_BOT_TOKEN")
 SLACK_CHANNEL = os.getenv("SLACK_CHANNEL_ID")
-GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
 
 slack_client = WebClient(token=SLACK_TOKEN)
 anthropic_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-
-# ─── Google Sheets client ─────────────────────────────────────────────────────
-
-SHEETS_SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
-SENTIMENT_LABEL = {"positive": "Positive", "negative": "Negative", "neutral": "Neutral"}
-
-
-def _get_sheets_client():
-    creds_file = os.getenv("GOOGLE_SHEETS_CREDS_FILE")
-    creds_json = os.getenv("GOOGLE_SHEETS_CREDENTIALS")
-    if creds_file:
-        creds = Credentials.from_service_account_file(creds_file, scopes=SHEETS_SCOPES)
-    elif creds_json:
-        decoded = base64.b64decode(creds_json).decode("utf-8")
-        info = json.loads(decoded)
-        creds = Credentials.from_service_account_info(info, scopes=SHEETS_SCOPES)
-    else:
-        return None
-    return gspread.authorize(creds)
-
-
-def _get_or_create_tab(sh, title: str, headers: list) -> gspread.Worksheet:
-    try:
-        ws = sh.worksheet(title)
-        ws.update(values=[headers], range_name="A1", value_input_option="RAW")
-    except gspread.WorksheetNotFound:
-        ws = sh.add_worksheet(title=title, rows=1000, cols=len(headers))
-        ws.update(values=[headers], range_name="A1", value_input_option="RAW")
-        ws.freeze(rows=1)
-    return ws
-
-
-def _format_tab(sh, ws, col_widths: list, tab_color: dict = None):
-    """Apply header styling, column widths, and text wrapping to a worksheet."""
-    sid = ws.id
-    n = len(col_widths)
-    reqs = []
-
-    # Header row: navy background, white bold text, centered, 42px tall
-    reqs.append({"repeatCell": {
-        "range": {"sheetId": sid, "startRowIndex": 0, "endRowIndex": 1,
-                  "startColumnIndex": 0, "endColumnIndex": n},
-        "cell": {"userEnteredFormat": {
-            "backgroundColor": {"red": 0.102, "green": 0.227, "blue": 0.361},
-            "horizontalAlignment": "CENTER",
-            "verticalAlignment": "MIDDLE",
-            "textFormat": {"foregroundColor": {"red": 1.0, "green": 1.0, "blue": 1.0},
-                           "fontSize": 10, "bold": True},
-            "wrapStrategy": "WRAP",
-        }},
-        "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,verticalAlignment,wrapStrategy)",
-    }})
-    reqs.append({"updateDimensionProperties": {
-        "range": {"sheetId": sid, "dimension": "ROWS", "startIndex": 0, "endIndex": 1},
-        "properties": {"pixelSize": 42},
-        "fields": "pixelSize",
-    }})
-
-    # Data rows: wrap text, align top
-    reqs.append({"repeatCell": {
-        "range": {"sheetId": sid, "startRowIndex": 1,
-                  "startColumnIndex": 0, "endColumnIndex": n},
-        "cell": {"userEnteredFormat": {
-            "wrapStrategy": "WRAP",
-            "verticalAlignment": "TOP",
-        }},
-        "fields": "userEnteredFormat(wrapStrategy,verticalAlignment)",
-    }})
-
-    # Column widths
-    for i, w in enumerate(col_widths):
-        reqs.append({"updateDimensionProperties": {
-            "range": {"sheetId": sid, "dimension": "COLUMNS",
-                      "startIndex": i, "endIndex": i + 1},
-            "properties": {"pixelSize": w},
-            "fields": "pixelSize",
-        }})
-
-    # Tab colour
-    if tab_color:
-        reqs.append({"updateSheetProperties": {
-            "properties": {"sheetId": sid, "tabColor": tab_color},
-            "fields": "tabColor",
-        }})
-
-    sh.batch_update({"requests": reqs})
 
 NOW = datetime.now(timezone.utc)
 WEEK_AGO = (NOW - timedelta(days=7)).strftime("%Y-%m-%d")
@@ -154,7 +59,6 @@ IS_MWF    = NOW.weekday() in (0, 2, 4)
 
 SEEN_URLS_FILE = Path(__file__).parent / "seen_urls.json"
 SEEN_CONTEXT_FILE = Path(__file__).parent / "seen_context.json"
-SHEET_URL = f"https://docs.google.com/spreadsheets/d/{os.getenv('GOOGLE_SHEET_ID', '')}/edit?usp=sharing"
 
 # ─── Graph state ─────────────────────────────────────────────────────────────
 
@@ -816,15 +720,9 @@ def post_slack(state: AgentState) -> dict:
             blocks.append(_finding_block(item))
         blocks.append({"type": "divider"})
 
-    # ── Sheet link ────────────────────────────────────────────────────────────
-    blocks.append({"type": "section", "text": {"type": "mrkdwn",
-                   "text": f"View full database in Google Sheets: <{SHEET_URL}|link>"}})
-
     # Slack hard limit is 50 blocks
     if len(blocks) > 49:
-        blocks = blocks[:48]
-        blocks.append({"type": "section", "text": {"type": "mrkdwn",
-                        "text": "_Some findings omitted — see Google Sheets for full results._"}})
+        blocks = blocks[:49]
 
     print(f"[Slack] Posting {len(blocks)} blocks…")
     try:
@@ -938,15 +836,10 @@ def _build_dm_blocks(name: str, team: str, overview: str, signal,
             blocks.append({"type": "divider"})
 
     blocks.append({"type": "context", "elements": [{"type": "mrkdwn",
-        "text": (
-            f"<{SHEET_URL}|View full database>  ·  "
-            "Run `/competitor-digest` to update your preferences"
-        )}]})
+        "text": "Run `/competitor-digest` to update your preferences"}]})
 
     if len(blocks) > 49:
-        blocks = blocks[:48]
-        blocks.append({"type": "section", "text": {"type": "mrkdwn",
-            "text": "_Some findings omitted — see Google Sheets for full results._"}})
+        blocks = blocks[:49]
 
     return blocks
 
@@ -972,65 +865,6 @@ def _prev_delivery_date(selected_days: list, reference_date: datetime) -> str:
     return (reference_date - timedelta(days=7)).strftime("%Y-%m-%d")
 
 
-def _load_findings_since(sh, since_date: str) -> dict:
-    """Pull all findings and positioning alerts from the sheet after since_date."""
-    TRACKED = set(COMPETITOR_ALIASES.keys()) - {YOUR_COMPANY}
-    SMAP = {"Positive": "positive", "Negative": "negative", "Neutral": "neutral"}
-    seen_urls: set = set()
-    findings, nimble_findings, positioning = [], [], []
-
-    try:
-        for r in sh.worksheet("All Findings").get_all_records():
-            d = r.get("Event Date", "")
-            if not d or d <= since_date:
-                continue
-            url = r.get("URL", "")
-            if url and url in seen_urls:
-                continue
-            if url:
-                seen_urls.add(url)
-            comp = r.get("Competitor", "")
-            f = {
-                "competitor":  comp,
-                "category":    r.get("Category", ""),
-                "title":       r.get("Title", ""),
-                "url":         url,
-                "summary":     r.get("Summary", ""),
-                "platform":    r.get("Platform", ""),
-                "source_type": r.get("Source Type", ""),
-                "sentiment":   SMAP.get(r.get("Sentiment", "Neutral"), "neutral"),
-                "event_date":  d,
-                "impact":      r.get("Impact", ""),
-            }
-            if comp == YOUR_COMPANY:
-                nimble_findings.append(f)
-            elif comp in TRACKED:
-                findings.append(f)
-
-        for r in sh.worksheet("Positioning Alerts").get_all_records():
-            d = r.get("Event Date", "")
-            if not d or d <= since_date:
-                continue
-            url = r.get("URL", "")
-            if url and url in seen_urls:
-                continue
-            if url:
-                seen_urls.add(url)
-            positioning.append({
-                "competitor": r.get("Competitor", ""),
-                "type":       r.get("Type", ""),
-                "title":      r.get("Title", ""),
-                "url":        url,
-                "summary":    r.get("Summary", ""),
-                "sentiment":  SMAP.get(r.get("Sentiment", "Neutral"), "neutral"),
-                "event_date": d,
-            })
-    except Exception as e:
-        print(f"[DMs] Sheet range load error: {e}")
-
-    return {"findings": findings, "nimble": nimble_findings, "positioning": positioning}
-
-
 def send_personalized_dms(state: AgentState) -> dict:
     try:
         from user_prefs import load_all_prefs, save_prefs
@@ -1051,10 +885,6 @@ def send_personalized_dms(state: AgentState) -> dict:
     overview    = synthesis.get("overview", "")
     today_name  = NOW.strftime("%A").lower()
 
-    # Sheet client for loading historical findings
-    gc = _get_sheets_client()
-    sh = gc.open_by_key(GOOGLE_SHEET_ID) if gc and GOOGLE_SHEET_ID else None
-
     sent = 0
     TRACKED = set(COMPETITOR_ALIASES.keys()) - {YOUR_COMPANY}
 
@@ -1068,33 +898,12 @@ def send_personalized_dms(state: AgentState) -> dict:
         selected_cats  = set(prefs.get("categories", []))
         include_nimble = prefs.get("include_nimble", True)
         brief          = prefs.get("format", "detailed") == "brief"
-        last_sent      = prefs.get("last_sent", "")
 
-        # ── Accumulate since last delivery ───────────────────────────────────
-        if sh:
-            effective_since = last_sent or _prev_delivery_date(selected_days, NOW)
-
-            hist = _load_findings_since(sh, effective_since)
-            seen = {f["url"] for f in hist["findings"] if f.get("url")}
-            combined_fnd = hist["findings"] + [
-                f for f in todays_fnd if f.get("url") not in seen]
-            seen_nim = {f["url"] for f in hist["nimble"] if f.get("url")}
-            combined_nim = hist["nimble"] + [
-                f for f in todays_nim if f.get("url") not in seen_nim]
-            seen_pos = {f["url"] for f in hist["positioning"] if f.get("url")}
-            combined_pos = hist["positioning"] + [
-                f for f in todays_pos if f.get("url") not in seen_pos]
-
-            from_dt  = datetime.strptime(effective_since, "%Y-%m-%d") + timedelta(days=1)
-            from_str = from_dt.strftime("%b %-d")
-            to_str   = NOW.strftime("%b %-d")
-            date_range = TODAY if from_str == to_str else f"{from_str} – {to_str}"
-        else:
-            # No sheet access: fall back to today's synthesis only
-            combined_fnd = todays_fnd
-            combined_nim = todays_nim
-            combined_pos = todays_pos
-            date_range   = TODAY
+        # Use today's synthesis directly
+        combined_fnd = todays_fnd
+        combined_nim = todays_nim
+        combined_pos = todays_pos
+        date_range   = TODAY
 
         # ── Filter to user's preferences ─────────────────────────────────────
         filtered = [f for f in combined_fnd
@@ -1111,16 +920,14 @@ def send_personalized_dms(state: AgentState) -> dict:
                 {"type": "section", "text": {"type": "mrkdwn",
                     "text": f"*Competitor Digest — {date_range}*\n\nNo significant competitor activity found in your categories for this period."}},
             ]
-            output = prefs.get("output", "slack")
-            if output in ("slack", "both"):
-                try:
-                    slack_client.chat_postMessage(
-                        channel=user_id, blocks=no_activity_blocks,
-                        text=f"Competitor Digest — {date_range}: No significant activity found.",
-                        unfurl_links=False, unfurl_media=False,
-                    )
-                except Exception as e:
-                    print(f"[DMs] No-activity notice error for {user_id}: {e}")
+            try:
+                slack_client.chat_postMessage(
+                    channel=user_id, blocks=no_activity_blocks,
+                    text=f"Competitor Digest — {date_range}: No significant activity found.",
+                    unfurl_links=False, unfurl_media=False,
+                )
+            except Exception as e:
+                print(f"[DMs] No-activity notice error for {user_id}: {e}")
             continue
 
         blocks = _build_dm_blocks(
@@ -1186,345 +993,6 @@ def save_state(state: AgentState) -> dict:
     return {}
 
 
-# ─── Obsidian vault output ───────────────────────────────────────────────────
-
-VAULT_PATH = Path(os.getenv("OBSIDIAN_VAULT_PATH", str(Path(__file__).parent / "vault")))
-SENTIMENT_EMOJI = {"positive": "🟢", "negative": "🔴", "neutral": "⚪"}
-
-
-def _finding_slug(competitor: str, title: str) -> str:
-    slug = re.sub(r"[^\w\s-]", "", title.lower())
-    slug = re.sub(r"[\s_]+", "-", slug.strip())[:40].rstrip("-")
-    comp_slug = competitor.lower().replace(" ", "-")
-    return f"{TODAY}-{comp_slug}-{slug}"
-
-
-def write_obsidian(state: AgentState) -> dict:
-    try:
-        return _write_obsidian_inner(state)
-    except Exception as e:
-        import traceback
-        print(f"[Obsidian] Write failed: {e}\n{traceback.format_exc()}")
-        return {}
-
-
-def _write_obsidian_inner(state: AgentState) -> dict:
-    synthesis = state.get("synthesis", {})
-    findings = synthesis.get("findings", [])
-    nimble_findings = synthesis.get("nimble_findings", [])
-    positioning_alerts = synthesis.get("positioning_alerts", [])
-    signal = synthesis.get("signal_of_week") or {}
-    overview = synthesis.get("overview", "")
-
-    daily_dir = VAULT_PATH / "Daily"
-    comp_dir = VAULT_PATH / "Competitors"
-    findings_dir = VAULT_PATH / "Findings"
-    daily_dir.mkdir(parents=True, exist_ok=True)
-    comp_dir.mkdir(parents=True, exist_ok=True)
-    findings_dir.mkdir(parents=True, exist_ok=True)
-
-    # ── Individual finding notes ──────────────────────────────────────────────
-    for f in findings + nimble_findings:
-        comp = f.get("competitor", "Unknown")
-        title = f.get("title", "untitled")
-        slug = _finding_slug(comp, title)
-        fpath = findings_dir / f"{slug}.md"
-        tags = ["finding", "competitor-intel", comp.lower().replace(" ", "-"), f.get("sentiment", "neutral")]
-        note = "\n".join([
-            "---",
-            f"date: {f.get('event_date') or TODAY}",
-            f"week: {WEEK_START}",
-            f"competitor: \"{comp}\"",
-            f"category: \"{f.get('category', '')}\"",
-            f"sentiment: {f.get('sentiment', 'neutral')}",
-            f"source_type: \"{f.get('source_type', '')}\"",
-            f"platform: \"{f.get('platform', '')}\"",
-            f"impact: \"{f.get('impact', '')}\"",
-            f"url: \"{f.get('url', '')}\"",
-            f"tags: [{', '.join(tags)}]",
-            "---",
-            "",
-            f"# [{title[:120]}]({f.get('url', '')})",
-            "",
-            f"**[[{comp}]]** · {f.get('category', '')} · {f.get('platform', '')} · {f.get('source_type', '')}",
-            "",
-            f"{f.get('summary', '')}",
-        ])
-        fpath.write_text(note)
-
-    print(f"Obsidian: wrote {len(findings + nimble_findings)} finding notes")
-
-    # ── Daily note (lightweight index) ───────────────────────────────────────
-    lines = [
-        "---",
-        f"date: {TODAY}",
-        f"week: {WEEK_START}",
-        "tags: [competitor-intel, daily]",
-        "---",
-        "",
-        f"# Competitor Intelligence — {TODAY}",
-        "",
-    ]
-
-    if overview:
-        lines += ["## Overview", "", overview, ""]
-
-    if signal and signal.get("title"):
-        sent = SENTIMENT_EMOJI.get(signal.get("sentiment", "neutral"), "⚪")
-        lines += [
-            "## Signal of the Day",
-            "",
-            f"{sent} **[[{signal.get('competitor', '')}]]** — [{signal.get('title', '')}]({signal.get('url', '')})",
-            f"> {signal.get('summary', '')}",
-            "",
-        ]
-
-    if positioning_alerts:
-        lines += ["## Positioning Alerts", ""]
-        for a in positioning_alerts:
-            tag = f"{YOUR_COMPANY} Comparison" if a.get("type") == "nimble_comparison" else "Pitch Change"
-            lines.append(f"- **[[{a.get('competitor', '')}]]** — [{a.get('title', '')}]({a.get('url', '')})  `{tag}`")
-            lines.append(f"  {a.get('summary', '')}")
-        lines.append("")
-
-    lines += [
-        "## Today's Findings",
-        "",
-        "```dataview",
-        'TABLE competitor, category, sentiment, impact',
-        'FROM "Findings"',
-        f'WHERE date = date({TODAY})',
-        "SORT competitor ASC",
-        "```",
-        "",
-    ]
-
-    daily_file = daily_dir / f"{TODAY}.md"
-    daily_file.write_text("\n".join(lines))
-    print(f"Obsidian: wrote {daily_file}")
-
-    # ── Competitor pages (always overwrite with rich queries) ─────────────────
-    competitors = list(COMPETITOR_ALIASES.keys())
-    for comp in competitors:
-        comp_file = comp_dir / f"{comp}.md"
-        comp_file.write_text("\n".join([
-            "---",
-            f"competitor: {comp}",
-            "tags: [competitor]",
-            "---",
-            "",
-            f"# {comp}",
-            "",
-            "## All Findings",
-            "",
-            "```dataview",
-            "TABLE date, category, sentiment, impact",
-            'FROM "Findings"',
-            f'WHERE competitor = "{comp}"',
-            "SORT date DESC",
-            "```",
-            "",
-            "## High Impact",
-            "",
-            "```dataview",
-            "TABLE date, category, sentiment",
-            'FROM "Findings"',
-            f'WHERE competitor = "{comp}" AND impact = "High"',
-            "SORT date DESC",
-            "```",
-            "",
-            "## Negative Coverage",
-            "",
-            "```dataview",
-            "TABLE date, category, impact",
-            'FROM "Findings"',
-            f'WHERE competitor = "{comp}" AND sentiment = "negative"',
-            "SORT date DESC",
-            "```",
-            "",
-            "## By Category",
-            "",
-            "```dataview",
-            "TABLE date, sentiment, impact",
-            'FROM "Findings"',
-            f'WHERE competitor = "{comp}"',
-            "SORT category ASC, date DESC",
-            "```",
-            "",
-        ]))
-        print(f"Obsidian: updated competitor page {comp_file.name}")
-
-    return {}
-
-
-# ─── Weekly trend analysis (Mondays only, Obsidian only) ─────────────────────
-
-def _parse_finding_frontmatter(path: Path) -> dict:
-    try:
-        content = path.read_text()
-        if not content.startswith("---"):
-            return {}
-        end = content.index("---", 3)
-        data = {}
-        for line in content[3:end].strip().splitlines():
-            if ":" in line:
-                k, v = line.split(":", 1)
-                data[k.strip()] = v.strip().strip('"')
-        return data
-    except Exception:
-        return {}
-
-
-def write_weekly_trends(state: AgentState) -> dict:
-    if NOW.weekday() != 0:
-        return {}
-
-    findings_dir = VAULT_PATH / "Findings"
-    weekly_dir = VAULT_PATH / "Weekly"
-    weekly_dir.mkdir(parents=True, exist_ok=True)
-
-    if not findings_dir.exists():
-        return {}
-
-    # This week's findings
-    this_week = [_parse_finding_frontmatter(f) for f in findings_dir.glob("*.md")]
-    this_week = [f for f in this_week if f.get("week") == WEEK_START]
-
-    if not this_week:
-        print("No findings for this week, skipping trend analysis.")
-        return {}
-
-    # Build this week summary string
-    by_comp: dict = {}
-    for f in this_week:
-        by_comp.setdefault(f.get("competitor", "Unknown"), []).append(f)
-
-    this_week_text = f"This week ({WEEK_START}) — {len(this_week)} findings:\n"
-    for comp, items in sorted(by_comp.items()):
-        this_week_text += f"\n{comp} ({len(items)}):\n"
-        for item in items:
-            this_week_text += f"  - {item.get('category')} | {item.get('sentiment')} | {item.get('impact')} impact\n"
-
-    # Last week context: use trend note if it exists, else raw findings
-    last_week_monday = (NOW - timedelta(days=7)).strftime("%Y-%m-%d")
-    last_trend_file = weekly_dir / f"{last_week_monday}.md"
-
-    if last_trend_file.exists():
-        prior_context = f"Last week's trend note ({last_week_monday}):\n{last_trend_file.read_text()}"
-    else:
-        prev = [_parse_finding_frontmatter(f) for f in findings_dir.glob("*.md")]
-        prev = [f for f in prev if f.get("week") == last_week_monday]
-        if prev:
-            prior_context = f"Previous week ({last_week_monday}) — {len(prev)} findings:\n"
-            by_prev: dict = {}
-            for f in prev:
-                by_prev.setdefault(f.get("competitor", "Unknown"), []).append(f)
-            for comp, items in sorted(by_prev.items()):
-                prior_context += f"\n{comp} ({len(items)}):\n"
-                for item in items:
-                    prior_context += f"  - {item.get('category')} | {item.get('sentiment')} | {item.get('impact')} impact\n"
-        else:
-            prior_context = "No prior week data available — this is the first trend analysis."
-
-    prompt = f"""You are a competitive intelligence analyst at {YOUR_COMPANY}.
-
-{prior_context}
-
-{this_week_text}
-
-Write a concise weekly trend analysis comparing this week to last. Focus on:
-1. Which competitors are accelerating or slowing down
-2. Sentiment shifts (is coverage getting more negative/positive for any player?)
-3. Emerging categories or themes gaining traction
-4. What this means strategically for {YOUR_COMPANY}
-
-Return ONLY valid JSON:
-{{
-  "headline": "One sentence capturing the single most important trend this week",
-  "trends": [
-    {{
-      "competitor": "Exa",
-      "direction": "accelerating",
-      "key_shift": "One sentence on what changed vs last week",
-      "implication": "One sentence on what this means for Nimble"
-    }}
-  ],
-  "themes": ["Theme 1", "Theme 2"],
-  "strategic_note": "2-3 sentences on the overall competitive landscape shift this week"
-}}
-Only include competitors with something meaningful to say. direction must be one of: accelerating, slowing, stable."""
-
-    try:
-        resp = anthropic_client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=1024,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        text = resp.content[0].text.strip()
-        m = re.search(r'\{.*\}', text, re.DOTALL)
-        text = m.group() if m else text
-        result = json.loads(text)
-    except Exception as e:
-        print(f"  [Weekly trends error] {e}")
-        return {}
-
-    direction_emoji = {"accelerating": "📈", "slowing": "📉", "stable": "➡️"}
-
-    lines = [
-        "---",
-        f"date: {WEEK_START}",
-        f"week: {WEEK_START}",
-        "tags: [competitor-intel, weekly-trends]",
-        "---",
-        "",
-        f"# Weekly Trends — Week of {WEEK_START}",
-        "",
-        "## Headline",
-        "",
-        result.get("headline", ""),
-        "",
-        "## Competitor Trends",
-        "",
-    ]
-
-    for t in result.get("trends", []):
-        emoji = direction_emoji.get(t.get("direction", "stable"), "➡️")
-        lines += [
-            f"### [[{t.get('competitor')}]] {emoji}",
-            "",
-            f"**Shift:** {t.get('key_shift', '')}",
-            "",
-            f"**For {YOUR_COMPANY}:** {t.get('implication', '')}",
-            "",
-        ]
-
-    if result.get("themes"):
-        lines += ["## Emerging Themes", ""]
-        for theme in result["themes"]:
-            lines.append(f"- {theme}")
-        lines.append("")
-
-    if result.get("strategic_note"):
-        lines += ["## Strategic Note", "", result["strategic_note"], ""]
-
-    lines += [
-        "## This Week's Findings",
-        "",
-        "```dataview",
-        "TABLE competitor, category, sentiment, impact",
-        'FROM "Findings"',
-        f'WHERE week = date({WEEK_START})',
-        "SORT competitor ASC",
-        "```",
-        "",
-    ]
-
-    weekly_file = weekly_dir / f"{WEEK_START}.md"
-    weekly_file.write_text("\n".join(lines))
-    print(f"Obsidian: wrote weekly trends → {weekly_file.name}")
-    return {}
-
-
 # ─── Weekly summary (Mondays only) ───────────────────────────────────────────
 
 def post_weekly_summary(state: AgentState) -> dict:
@@ -1585,9 +1053,6 @@ Include at most 2 links — only if a story was truly significant. Leave links a
                       for l in links[:2]]
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(link_lines)}})
 
-    blocks.append({"type": "section", "text": {"type": "mrkdwn",
-                   "text": f"View full database in Google Sheets: <{SHEET_URL}|link>"}})
-
     try:
         slack_client.chat_postMessage(
             channel=SLACK_CHANNEL, blocks=blocks,
@@ -1601,306 +1066,7 @@ Include at most 2 links — only if a story was truly significant. Leave links a
     return {}
 
 
-# ─── Google Sheets update ─────────────────────────────────────────────────────
-
-ALL_FINDINGS_HEADERS = [
-    "Event Date", "Week Of", "Competitor", "Platform", "Category",
-    "Title", "URL", "Summary", "Source Type", "Sentiment", "Impact",
-]
-
-
-def _llm_review(findings: list, history_rows: list) -> list:
-    """Second Claude pass: enrich each finding with Impact rating."""
-    if not findings:
-        return []
-
-    history_summary = ""
-    if history_rows:
-        recent = history_rows[-50:]
-        history_summary = "\n".join(
-            f"  [{r[1]}] {r[2]} — {r[4]} — {r[5]}" for r in recent if len(r) >= 6
-        )
-
-    findings_for_review = json.dumps(
-        [{"competitor": f.get("competitor", ""), "category": f.get("category", ""),
-          "title": f.get("title", ""), "summary": f.get("summary", "")}
-         for f in findings], indent=2)
-
-    prompt = f"""You are a competitive intelligence reviewer at {YOUR_COMPANY}.
-Review each finding below and assess it against recent history.
-
-RECENT SHEET HISTORY (last 50 entries):
-{history_summary or '  (none yet)'}
-
-For each finding return a JSON array in the same order with these fields:
-- "impact": "High", "Medium", or "Low" — strategic impact on {YOUR_COMPANY}'s business
-
-Findings to review:
-{findings_for_review}
-
-Return ONLY a JSON array of objects with keys: impact."""
-
-    try:
-        resp = anthropic_client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=4096,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        text = resp.content[0].text.strip()
-        m = re.search(r'\[.*\]', text, re.DOTALL)
-        text = m.group() if m else text
-        reviews = json.loads(text)
-        return reviews if isinstance(reviews, list) else []
-    except Exception as e:
-        print(f"  [LLM review error] {e}")
-        return [{"impact": "?"}] * len(findings)
-
-
-def update_sheet(state: AgentState) -> dict:
-    try:
-        return _update_sheet_inner(state)
-    except Exception as e:
-        import traceback
-        print(f"  [Sheets error] {e}\n{traceback.format_exc()}")
-        return {}
-
-
-def _update_sheet_inner(state: AgentState) -> dict:
-    if not GOOGLE_SHEET_ID:
-        print("No GOOGLE_SHEET_ID — skipping sheet update.")
-        return {}
-
-    gc = _get_sheets_client()
-    if not gc:
-        print("No Google Sheets credentials — skipping sheet update.")
-        return {}
-
-    sh = gc.open_by_key(GOOGLE_SHEET_ID)
-
-    synthesis = state.get("synthesis", {})
-    findings = synthesis.get("findings", [])
-    nimble_findings = [{**f, "competitor": YOUR_COMPANY} for f in synthesis.get("nimble_findings", [])]
-    positioning = [{**f, "category": "Positioning"} for f in synthesis.get("positioning_alerts", [])]
-    all_findings = findings + nimble_findings + positioning
-
-    if not all_findings:
-        print("No findings to write to sheet.")
-        return {}
-
-    # ── All Findings tab ──────────────────────────────────────────────────────
-    ws_all = _get_or_create_tab(sh, "All Findings", ALL_FINDINGS_HEADERS)
-    _format_tab(sh, ws_all,
-        col_widths=[100, 100, 110, 105, 110, 230, 270, 370, 115, 100, 80],
-        tab_color={"red": 0.29, "green": 0.565, "blue": 0.851})
-    existing = ws_all.get_all_values()
-    history_rows = existing[1:] if len(existing) > 1 else []
-
-    reviews = _llm_review(all_findings, history_rows)
-
-    if len(reviews) != len(all_findings):
-        print(f"  [LLM review] WARNING: got {len(reviews)} reviews for {len(all_findings)} findings — impact ratings may be misaligned")
-    rows_to_add = []
-    for i, f in enumerate(all_findings):
-        rev = reviews[i] if i < len(reviews) else {}
-        sentiment = SENTIMENT_LABEL.get(f.get("sentiment", "neutral"), "Neutral")
-        rows_to_add.append([
-            f.get("event_date") or TODAY,
-            WEEK_START,
-            f.get("competitor", ""),
-            f.get("platform", ""),
-            f.get("category", ""),
-            f.get("title", "")[:120],
-            f.get("url", ""),
-            f.get("summary", "")[:300],
-            f.get("source_type", ""),
-            sentiment,
-            rev.get("impact", "?"),
-        ])
-
-    if rows_to_add:
-        safe_rows = [[str(v) if v is not None else "" for v in row] for row in rows_to_add]
-        ws_all.append_rows(safe_rows, value_input_option="RAW")
-
-    # ── Positioning Alerts tab ────────────────────────────────────────────────
-    if positioning:
-        pos_headers = ["Event Date", "Week Of", "Competitor", "Type", "Title", "URL", "Summary", "Source Type", "Sentiment", "Impact"]
-        ws_pos = _get_or_create_tab(sh, "Positioning Alerts", pos_headers)
-        _format_tab(sh, ws_pos,
-            col_widths=[100, 100, 110, 130, 230, 270, 370, 115, 100, 80],
-            tab_color={"red": 0.878, "green": 0.361, "blue": 0.184})
-        pos_rows = []
-        for i, f in enumerate(positioning):
-            global_i = len(findings) + len(nimble_findings) + i
-            rev = reviews[global_i] if global_i < len(reviews) else {}
-            pos_rows.append([
-                f.get("event_date") or TODAY, WEEK_START,
-                f.get("competitor", ""),
-                f.get("type", ""),
-                f.get("title", "")[:120],
-                f.get("url", ""),
-                f.get("summary", "")[:300],
-                f.get("source_type", ""),
-                SENTIMENT_LABEL.get(f.get("sentiment", "neutral"), "Neutral"),
-                rev.get("impact", "?"),
-            ])
-        ws_pos.append_rows(pos_rows, value_input_option="RAW")
-
-    # ── Weekly Digest tab ─────────────────────────────────────────────────────
-    ws_digest = _get_or_create_tab(sh, "Weekly Digest", WEEKLY_DIGEST_HEADERS)
-    _format_tab(sh, ws_digest,
-        col_widths=[100, 100, 420, 230, 270, 75, 85, 75, 95, 85, 75],
-        tab_color={"red": 0.18, "green": 0.49, "blue": 0.196})
-    signal = synthesis.get("signal_of_week") or {}
-    activity_map = {a["competitor"]: a.get("signal_count", 0) for a in synthesis.get("activity", [])}
-    ws_digest.append_row(
-        [TODAY, WEEK_START, synthesis.get("overview", ""), signal.get("title", ""), signal.get("url", "")]
-        + [activity_map.get(comp, 0) for comp in COMPETITOR_ALIASES.keys()],
-        value_input_option="RAW"
-    )
-
-    # ── Per-competitor tabs (QUERY formula on first run) ──────────────────────
-    competitors = list(COMPETITOR_ALIASES.keys())
-    comp_color = {"red": 0.376, "green": 0.49, "blue": 0.545}
-    comp_widths = [100, 100, 110, 105, 110, 230, 270, 370, 115, 100, 80]
-    for comp in competitors:
-        try:
-            ws_comp = sh.worksheet(comp)
-        except gspread.WorksheetNotFound:
-            ws_comp = sh.add_worksheet(title=comp, rows=1000, cols=len(ALL_FINDINGS_HEADERS))
-            formula_row = [f'=QUERY(\'All Findings\'!A:M,"SELECT * WHERE C=\'{comp}\' ORDER BY A DESC",1)']
-            ws_comp.update("A1", [formula_row], value_input_option="USER_ENTERED")
-        _format_tab(sh, ws_comp, comp_widths, tab_color=comp_color)
-
-    print(f"Sheet updated: {len(rows_to_add)} findings, {len(positioning)} positioning alerts")
-    return {}
-
-
 # ─── Build and run graph ──────────────────────────────────────────────────────
-
-# ─── Competitor metrics collection (runs every day) ──────────────────────────
-
-METRICS_HEADERS = [
-    "Date", "Competitor",
-    "GitHub Stars", "GitHub Forks",
-    "PyPI Downloads (last month)",
-    "Web Traffic Est.", "Traffic Source",
-    "Open Jobs",
-]
-
-
-def _fetch_github_metrics(repo: str) -> dict:
-    if not repo:
-        return {}
-    try:
-        r = requests.get(f"https://api.github.com/repos/{repo}",
-                         headers={"Authorization": f"token {GITHUB_TOKEN}",
-                                  "Accept": "application/vnd.github.v3+json"}, timeout=10)
-        if r.status_code == 200:
-            d = r.json()
-            return {"stars": d.get("stargazers_count", ""), "forks": d.get("forks_count", "")}
-    except Exception as e:
-        print(f"  [GitHub metrics error] {repo}: {e}")
-    return {}
-
-
-def _fetch_pypi_downloads(package: str) -> str:
-    if not package:
-        return ""
-    try:
-        r = requests.get(f"https://pypistats.org/api/packages/{package}/recent", timeout=10)
-        if r.status_code == 200:
-            return str(r.json().get("data", {}).get("last_month", ""))
-    except Exception as e:
-        print(f"  [PyPI metrics error] {package}: {e}")
-    return ""
-
-
-def _search_job_count(competitor: str) -> str:
-    try:
-        headers = {"Authorization": f"Bearer {NIMBLE_API_KEY}", "Content-Type": "application/json"}
-        body = {"query": f"{competitor} jobs hiring site:linkedin.com OR site:greenhouse.io OR site:lever.co 2026",
-                "num_results": 5}
-        r = requests.post("https://sdk.nimbleway.com/v1/search", json=body,
-                          headers=headers, timeout=20)
-        if r.status_code == 200:
-            results = r.json().get("results", [])
-            return str(len([x for x in results if competitor.lower() in
-                            (x.get("title", "") + x.get("description", "")).lower()]))
-    except Exception as e:
-        print(f"  [Job search error] {competitor}: {e}")
-    return ""
-
-
-def _search_traffic_estimate(competitor: str) -> dict:
-    try:
-        headers = {"Authorization": f"Bearer {NIMBLE_API_KEY}", "Content-Type": "application/json"}
-        body = {"query": f"{competitor} site:similarweb.com monthly visits traffic", "num_results": 3}
-        r = requests.post("https://sdk.nimbleway.com/v1/search", json=body,
-                          headers=headers, timeout=20)
-        if r.status_code == 200:
-            for item in r.json().get("results", []):
-                desc = item.get("description", "")
-                if any(x in desc.lower() for x in ["visits", "traffic", "monthly"]):
-                    return {"traffic": desc[:120], "source": item.get("url", "")}
-    except Exception as e:
-        print(f"  [Traffic search error] {competitor}: {e}")
-    return {}
-
-
-def collect_metrics(state: AgentState) -> dict:
-    """Collect quantitative competitor metrics — Mondays only."""
-    if not IS_MONDAY:
-        print("  [Metrics] Skipping — runs Mondays only")
-        return {}
-    try:
-        creds_b64  = os.getenv("GOOGLE_SHEETS_CREDENTIALS")
-        creds_file = os.getenv("GOOGLE_SHEETS_CREDS_FILE")
-        if creds_b64:
-            info  = json.loads(base64.b64decode(creds_b64))
-            creds = Credentials.from_service_account_info(info, scopes=SHEETS_SCOPES)
-        else:
-            creds = Credentials.from_service_account_file(creds_file, scopes=SHEETS_SCOPES)
-        gc = gspread.authorize(creds)
-        sh = gc.open_by_key(os.getenv("GOOGLE_SHEET_ID"))
-    except Exception as e:
-        print(f"  [Metrics] Sheet auth error: {e}")
-        return {}
-
-    # Get or create Metrics tab
-    try:
-        ws = sh.worksheet("Metrics")
-        existing = ws.get_all_values()
-        if not existing or existing[0] != METRICS_HEADERS:
-            ws.update(values=[METRICS_HEADERS], range_name="A1", value_input_option="RAW")
-    except gspread.WorksheetNotFound:
-        ws = sh.add_worksheet(title="Metrics", rows=500, cols=len(METRICS_HEADERS))
-        ws.update(values=[METRICS_HEADERS], range_name="A1", value_input_option="RAW")
-        ws.freeze(rows=1)
-
-    competitors = list(GITHUB_REPOS.keys())
-    rows = []
-    for comp in competitors:
-        print(f"  [Metrics] Collecting for {comp}...")
-        gh   = _fetch_github_metrics(GITHUB_REPOS.get(comp))
-        pypi = _fetch_pypi_downloads(PYPI_PACKAGES.get(comp))
-        jobs = _search_job_count(comp)
-        traffic = _search_traffic_estimate(comp)
-        rows.append([
-            TODAY, comp,
-            gh.get("stars", ""),
-            gh.get("forks", ""),
-            pypi,
-            traffic.get("traffic", ""),
-            traffic.get("source", ""),
-            jobs,
-        ])
-
-    if rows:
-        ws.append_rows(rows, value_input_option="RAW")
-        print(f"  [Metrics] Wrote {len(rows)} competitor metric rows")
-
-    return {}
-
 
 def build_graph():
     g = StateGraph(AgentState)
@@ -1910,12 +1076,8 @@ def build_graph():
     g.add_node("synthesize", synthesize)
     g.add_node("post_slack", post_slack)
     g.add_node("send_personalized_dms", send_personalized_dms)
-    g.add_node("update_sheet", update_sheet)
     g.add_node("save_state", save_state)
-    g.add_node("write_obsidian", write_obsidian)
     g.add_node("post_weekly_summary", post_weekly_summary)
-    g.add_node("write_weekly_trends", write_weekly_trends)
-    g.add_node("collect_metrics", collect_metrics)
 
     g.add_edge(START, "load_state")
     g.add_conditional_edges("load_state", route_collectors, ["collect_competitor"])
@@ -1923,13 +1085,9 @@ def build_graph():
     g.add_edge("deduplicate", "synthesize")
     g.add_edge("synthesize", "post_slack")
     g.add_edge("post_slack", "send_personalized_dms")
-    g.add_edge("send_personalized_dms", "update_sheet")
-    g.add_edge("update_sheet", "write_obsidian")
-    g.add_edge("write_obsidian", "save_state")
+    g.add_edge("send_personalized_dms", "save_state")
     g.add_edge("save_state", "post_weekly_summary")
-    g.add_edge("post_weekly_summary", "write_weekly_trends")
-    g.add_edge("write_weekly_trends", "collect_metrics")
-    g.add_edge("collect_metrics", END)
+    g.add_edge("post_weekly_summary", END)
     return g.compile()
 
 

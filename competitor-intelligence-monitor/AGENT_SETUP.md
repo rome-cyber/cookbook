@@ -12,12 +12,10 @@ Complete setup instructions for every component of the Competitor Intelligence M
 4. [Nimble API](#4-nimble-api)
 5. [Anthropic API](#5-anthropic-api)
 6. [Slack integration](#6-slack-integration)
-7. [Google Sheets integration](#7-google-sheets-integration)
-8. [GitHub API token](#8-github-api-token)
-9. [GitHub Actions — automated daily runs](#9-github-actions--automated-daily-runs)
-10. [Streamlit dashboard](#10-streamlit-dashboard)
-11. [Slack bot hosting](#11-slack-bot-hosting)
-12. [Troubleshooting](#12-troubleshooting)
+7. [GitHub API token](#7-github-api-token)
+8. [GitHub Actions — automated daily runs](#8-github-actions--automated-daily-runs)
+9. [Slack bot hosting](#9-slack-bot-hosting)
+10. [Troubleshooting](#10-troubleshooting)
 
 ---
 
@@ -56,14 +54,13 @@ The fastest way to get started. Run:
 python onboard.py
 ```
 
-The wizard walks through 6 steps:
+The wizard walks through 5 steps:
 
 1. **Your company** — name, aliases, description, industry
 2. **Competitors** — add as many as you want; name, aliases, optional GitHub repo and PyPI package
 3. **API keys** — Nimble and Anthropic (required)
 4. **Slack** — bot token, channel ID, signing secret (optional)
-5. **Google Sheets** — sheet ID and service account credentials (optional)
-6. **GitHub** — API token for release and repo tracking (optional)
+5. **GitHub** — API token for release and repo tracking (optional)
 
 At the end it writes `config.json` and `.env`. You can re-run it at any time to reconfigure.
 
@@ -82,7 +79,7 @@ The Nimble API powers all web search — Reddit, news, LinkedIn, reviews, blogs,
 3. Create a new key
 4. Copy the key into `.env` as `NIMBLE_API_KEY`
 
-The agent makes roughly 10–15 search calls per competitor per run, plus a few more for job and traffic estimates. A standard Nimble account handles this comfortably at daily frequency.
+The agent makes roughly 10–15 search calls per competitor per run. A standard Nimble account handles this comfortably at daily frequency.
 
 ---
 
@@ -90,9 +87,7 @@ The agent makes roughly 10–15 search calls per competitor per run, plus a few 
 
 Claude performs the synthesis: reading all raw search results, identifying what's actually new and significant, writing summaries, scoring impact, and building the Slack messages.
 
-Two Claude models are used:
-- `claude-sonnet-4-6` — main synthesis (finding summaries, overview, signal of the day)
-- `claude-haiku-4-5` — secondary pass for impact scoring (faster, cheaper)
+The model used is `claude-sonnet-4-6` for the main synthesis pass.
 
 **Get your key:**
 
@@ -164,68 +159,11 @@ This enables `/competitor-digest` for personalized DM subscriptions.
 4. Short description: `Subscribe to your competitor intelligence digest`
 5. Save
 
-See [Section 11](#11-slack-bot-hosting) for hosting `slack_bot.py`.
+See [Section 9](#9-slack-bot-hosting) for hosting `slack_bot.py`.
 
 ---
 
-## 7. Google Sheets integration
-
-Findings are written to a Google Spreadsheet as a structured database. The Streamlit dashboard reads from the same sheet.
-
-### 7.1 Create a spreadsheet
-
-1. Go to [sheets.google.com](https://sheets.google.com) and create a new blank spreadsheet
-2. The spreadsheet ID is in the URL: `https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit`
-3. Copy the sheet ID into `.env` as `GOOGLE_SHEET_ID`
-
-The agent creates all tabs (All Findings, Positioning Alerts, Weekly Digest, per-competitor tabs, Metrics) automatically on first run.
-
-### 7.2 Create a service account
-
-A service account lets the agent write to the spreadsheet without interactive authentication.
-
-1. Go to [Google Cloud Console](https://console.cloud.google.com)
-2. Create a new project (or use an existing one)
-3. Go to **APIs & Services** → **Enable APIs** → search for **Google Sheets API** → Enable it
-4. Go to **IAM & Admin** → **Service Accounts** → **Create Service Account**
-5. Give it a name (e.g. "competitor-monitor") and click through to finish
-6. Click the service account → **Keys** tab → **Add Key** → **Create new key** → JSON
-7. Download the JSON file
-
-### 7.3 Encode the credentials
-
-The credentials are stored as a base64 string in `.env` to avoid committing a JSON file.
-
-```bash
-base64 -i your-service-account-key.json | tr -d '\n'
-```
-
-Copy the output into `.env` as `GOOGLE_SHEETS_CREDENTIALS`.
-
-On Windows (PowerShell):
-```powershell
-[Convert]::ToBase64String([IO.File]::ReadAllBytes("your-service-account-key.json"))
-```
-
-### 7.4 Share the spreadsheet
-
-1. Open the JSON key file and find the `client_email` field (looks like `name@project.iam.gserviceaccount.com`)
-2. Open your Google spreadsheet → **Share**
-3. Share it with the service account email as an **Editor**
-
-### 7.5 Using a credentials file instead of base64 (local only)
-
-If running locally and you don't want to base64-encode, you can set:
-
-```env
-GOOGLE_SHEETS_CREDS_FILE=/absolute/path/to/your-key.json
-```
-
-This takes precedence over `GOOGLE_SHEETS_CREDENTIALS` when both are set.
-
----
-
-## 8. GitHub API token
+## 7. GitHub API token
 
 Used for two things:
 - Searching GitHub repos and issues mentioning competitors
@@ -242,11 +180,11 @@ Without a token, GitHub search hits the public unauthenticated rate limit quickl
 
 ---
 
-## 9. GitHub Actions — automated daily runs
+## 8. GitHub Actions — automated daily runs
 
 The agent is designed to run on a schedule via GitHub Actions. The workflow file is already included at `.github/workflows/daily_monitor.yml`.
 
-### 9.1 Add secrets to your repository
+### 8.1 Add secrets to your repository
 
 The workflow reads API keys from GitHub Secrets (never hardcode them in the workflow file).
 
@@ -260,10 +198,8 @@ The workflow reads API keys from GitHub Secrets (never hardcode them in the work
 | `SLACK_BOT_TOKEN` | If using Slack |
 | `SLACK_CHANNEL_ID` | If using Slack |
 | `GH_API_KEY` | If using GitHub tracking |
-| `GOOGLE_SHEET_ID` | If using Google Sheets |
-| `GOOGLE_SHEETS_CREDENTIALS` | If using Google Sheets |
 
-### 9.2 Commit `config.json`
+### 8.2 Commit `config.json`
 
 `config.json` holds your competitor list and is not a secret — it should be committed to the repo so GitHub Actions can read it.
 
@@ -275,7 +211,7 @@ git push
 
 Do not commit `.env` — it is in `.gitignore`.
 
-### 9.3 Set up a daily trigger
+### 8.3 Set up a daily trigger
 
 The workflow uses `workflow_dispatch` (manual or API trigger) rather than GitHub's built-in `schedule:` cron. GitHub's scheduled workflows run 4–10 hours late during peak times, which makes daily digests unreliable.
 
@@ -295,7 +231,7 @@ The workflow uses `workflow_dispatch` (manual or API trigger) rather than GitHub
 
 The GitHub token used here only needs `workflow` scope. Create one at [github.com/settings/tokens](https://github.com/settings/tokens).
 
-### 9.4 How state is persisted
+### 8.4 How state is persisted
 
 After each run, the workflow commits two files back to the repo:
 
@@ -306,38 +242,7 @@ The workflow has `permissions: contents: write` for this reason. The commit mess
 
 ---
 
-## 10. Streamlit dashboard
-
-The dashboard (`app.py`) reads from Google Sheets and visualizes all findings. It requires Google Sheets to be configured.
-
-### Run locally
-
-```bash
-streamlit run app.py
-```
-
-Opens at `http://localhost:8501`.
-
-### Deploy to Streamlit Community Cloud (free)
-
-1. Push your repo to GitHub (with `config.json` committed)
-2. Go to [share.streamlit.io](https://share.streamlit.io)
-3. Connect your GitHub repo
-4. Set the main file path to `app.py`
-5. In **Advanced settings** → **Secrets**, add your environment variables in TOML format:
-   ```toml
-   GOOGLE_SHEET_ID = "your_sheet_id"
-   GOOGLE_SHEETS_CREDENTIALS = "your_base64_credentials"
-   ```
-6. Deploy
-
-### Deploy to other platforms
-
-The dashboard is a standard Streamlit app with no special requirements beyond the env vars listed above. It works on any platform that supports Python (Railway, Render, Heroku, etc.).
-
----
-
-## 11. Slack bot hosting
+## 9. Slack bot hosting
 
 `slack_bot.py` is a Flask server that handles the `/competitor-digest` slash command. It needs to be publicly accessible so Slack can send requests to it.
 
@@ -351,8 +256,6 @@ web: python3 slack_bot.py
 ```env
 SLACK_BOT_TOKEN=xoxb-...
 SLACK_SIGNING_SECRET=your_secret
-GOOGLE_SHEET_ID=your_sheet_id
-GOOGLE_SHEETS_CREDENTIALS=base64_encoded_json
 ```
 
 ### Deploy to Railway (recommended, free tier available)
@@ -360,7 +263,7 @@ GOOGLE_SHEETS_CREDENTIALS=base64_encoded_json
 1. Push your repo to GitHub
 2. Go to [railway.app](https://railway.app) → New Project → Deploy from GitHub repo
 3. Select your repo
-4. In Variables, add the four env vars above
+4. In Variables, add the two env vars above
 5. Railway detects the Procfile and starts `slack_bot.py` automatically
 6. Copy the generated public URL (e.g. `https://your-app.up.railway.app`)
 7. Update your Slack slash command's Request URL to `{your-url}/slack/events`
@@ -389,7 +292,7 @@ Use the ngrok HTTPS URL as the slash command Request URL in your Slack app.
 
 ---
 
-## 12. Troubleshooting
+## 10. Troubleshooting
 
 ### Agent runs but posts nothing to Slack
 
@@ -402,12 +305,6 @@ Use the ngrok HTTPS URL as the slash command Request URL in your Slack app.
 
 The agent filters results to the past 24 hours by default. On a first run there may simply be no fresh results for some competitors. Try widening by editing `SEARCH_START` in `agent.py` temporarily, or wait a day.
 
-### Google Sheets "403 Permission denied"
-
-- Confirm you shared the spreadsheet with the service account email (from the JSON key's `client_email` field)
-- Confirm the Google Sheets API is enabled in your Google Cloud project
-- Confirm `GOOGLE_SHEETS_CREDENTIALS` is the base64-encoded JSON with no extra newlines (`tr -d '\n'` removes them)
-
 ### GitHub Actions workflow not running
 
 - Confirm `config.json` is committed to the repo (not gitignored)
@@ -417,7 +314,7 @@ The agent filters results to the past 24 hours by default. On a first run there 
 
 ### Duplicate findings across days
 
-`seen_urls.json` is the deduplication state. If it gets out of sync (e.g. a failed commit in GitHub Actions), the agent may re-report previously seen items. You can clear it by resetting the file to `{}` — the agent will treat the next run as a fresh start.
+`seen_urls.json` is the deduplication state. If it gets out of sync (e.g. a failed commit in GitHub Actions), the agent may re-report previously seen items. You can clear it by resetting the file to `{"entries": {}}` — the agent will treat the next run as a fresh start.
 
 ### Claude synthesis returns malformed JSON
 
