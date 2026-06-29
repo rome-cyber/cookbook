@@ -1,0 +1,45 @@
+{
+  "your_company": {
+    "name": "Nimble",
+    "aliases": ["Nimbleway", "nimbleway.com", "Nimble API", "Nimble web scraping"],
+    "description": "a web data and scraping API company",
+    "industry": "web scraping and data APIs"
+  },
+  "competitors": [
+    {
+      "name": "Exa",
+      "aliases": ["Exa", "exa.ai"],
+      "github_repo": "exa-labs/exa-mcp-server",
+      "pypi_package": "exa-py",
+      "color": "#3498db"
+    },
+    {
+      "name": "Parallel AI",
+      "aliases": ["Parallel Labs", "Parallel AI", "parallel.ai"],
+      "github_repo": null,
+      "pypi_package": null,
+      "color": "#1abc9c"
+    },
+    {
+      "name": "Firecrawl",
+      "aliases": ["Firecrawl", "firecrawl.dev"],
+      "github_repo": "mendableai/firecrawl",
+      "pypi_package": "firecrawl-py",
+      "color": "#e67e22"
+    },
+    {
+      "name": "Tavily",
+      "aliases": ["Tavily", "tavily.com"],
+      "github_repo": "tavily-ai/tavily-mcp",
+      "pypi_package": "tavily-python",
+      "color": "#9b59b6"
+    },
+    {
+      "name": "Brave AI",
+      "aliases": ["Brave AI", "Brave Search"],
+      "github_repo": "brave/brave-search-mcp-server",
+      "pypi_package": null,
+      "color": "#e74c3c"
+    }
+  ]
+}
