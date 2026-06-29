@@ -39,8 +39,8 @@ config.json          .env
 
 ```bash
 # 1. Clone and install dependencies
-git clone <this-repo>
-cd <this-repo>
+git clone https://github.com/Nimbleway/cookbook
+cd cookbook/competitor-intelligence-monitor/agent
 pip install -r requirements.txt
 
 # 2. Run the interactive setup wizard
@@ -149,17 +149,20 @@ All optional keys can be omitted. The agent skips integrations whose keys are mi
 ## Project structure
 
 ```
-├── agent.py          Main agent — data collection, synthesis, all outputs
-├── slack_bot.py      Slack /competitor-digest slash command handler
-├── user_prefs.py     Read/write user digest preferences (local JSON file)
-├── onboard.py        Interactive setup wizard
-├── config.json       Company and competitor configuration
-├── requirements.txt  Python dependencies
-├── seen_urls.json    Rolling 30-day URL deduplication state
-├── seen_context.json Rolling 7-day topic deduplication state
-└── .github/
-    └── workflows/
-        └── daily_monitor.yml   GitHub Actions daily run
+├── README.md
+├── AGENT_SETUP.md
+└── agent/
+    ├── agent.py          Main agent — data collection, synthesis, all outputs
+    ├── slack_bot.py      Slack /competitor-digest slash command handler
+    ├── user_prefs.py     Read/write user digest preferences (local JSON file)
+    ├── onboard.py        Interactive setup wizard
+    ├── config.json       Company and competitor configuration
+    ├── requirements.txt  Python dependencies
+    ├── seen_urls.json    Rolling 30-day URL deduplication state
+    ├── seen_context.json Rolling 7-day topic deduplication state
+    └── .github/
+        └── workflows/
+            └── daily_monitor.yml   GitHub Actions daily run
 ```
 
 ---
