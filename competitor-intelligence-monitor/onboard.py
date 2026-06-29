@@ -89,7 +89,7 @@ Welcome! This wizard sets up your competitor intelligence monitor.
 It will:
   • Configure your company and the competitors you want to track
   • Collect the API keys required to run the monitor
-  • Set up optional Slack, Google Sheets, and GitHub integrations
+  • Set up optional Slack and GitHub integrations
   • Write a {green('config.json')} and {green('.env')} file ready to use
 
 Takes about {bold('2–3 minutes')} to complete.
@@ -99,7 +99,7 @@ Takes about {bold('2–3 minutes')} to complete.
 # ─── Step 1: Your company ─────────────────────────────────────────────────────
 
 def step_your_company():
-    section_header("Step 1 of 6 — Your Company")
+    section_header("Step 1 of 5 — Your Company")
 
     print(dim("  The monitor will track what people say about your company,\n"
               "  and position your company against the competitors you add next.\n"))
@@ -132,7 +132,7 @@ def step_your_company():
 # ─── Step 2: Competitors ──────────────────────────────────────────────────────
 
 def step_competitors():
-    section_header("Step 2 of 6 — Competitors")
+    section_header("Step 2 of 5 — Competitors")
 
     print(dim("  Add the competitors you want to monitor, one at a time.\n"
               "  You can add as many as you like. Type 'done' when finished.\n"))
@@ -188,7 +188,7 @@ def step_competitors():
 # ─── Step 3: API keys (required) ─────────────────────────────────────────────
 
 def step_api_keys():
-    section_header("Step 3 of 6 — API Keys (Required)")
+    section_header("Step 3 of 5 — API Keys (Required)")
 
     print(f"  These two keys are {bold('required')} to run the monitor:\n")
 
@@ -209,7 +209,7 @@ def step_api_keys():
 # ─── Step 4: Slack integration (optional) ────────────────────────────────────
 
 def step_slack():
-    section_header("Step 4 of 6 — Slack Integration (Optional)")
+    section_header("Step 4 of 5 — Slack Integration (Optional)")
 
     print(dim("  If configured, the monitor posts a daily digest to a Slack channel\n"
               "  and supports personalized DMs via the /competitor-digest slash command.\n"))
@@ -240,46 +240,10 @@ def step_slack():
     }
 
 
-# ─── Step 5: Google Sheets integration (optional) ────────────────────────────
-
-def step_google_sheets():
-    section_header("Step 5 of 6 — Google Sheets Integration (Optional)")
-
-    print(dim("  If configured, findings are written to a Google Sheet as a master database.\n"
-              "  The Streamlit dashboard reads from this sheet.\n"))
-
-    want_sheets = prompt_yes_no("  Set up Google Sheets integration?", default_yes=False)
-    if not want_sheets:
-        print(f"  {dim('Skipping Google Sheets — you can add it later by editing .env')}")
-        return {"GOOGLE_SHEET_ID": "", "GOOGLE_SHEETS_CREDENTIALS": ""}
-
-    print(dim("\n  Find the spreadsheet ID in the sheet URL:"))
-    print(dim("  https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit"))
-    sheet_id = prompt("  GOOGLE_SHEET_ID")
-
-    print(f"\n  {cyan('GOOGLE_SHEETS_CREDENTIALS')} — base64-encoded service account JSON")
-    print(dim("  How to create one:"))
-    print(dim("    1. Go to Google Cloud Console → IAM & Admin → Service Accounts"))
-    print(dim("    2. Create a new service account → add Sheets editor role"))
-    print(dim("    3. Create a JSON key → download it"))
-    print(dim("    4. Run:  base64 -i your-key.json | tr -d '\\n'"))
-    print(dim("    5. Share the spreadsheet with the service account email\n"))
-
-    creds_b64 = prompt_optional(
-        "  GOOGLE_SHEETS_CREDENTIALS",
-        hint="paste base64-encoded JSON, or leave blank to add later",
-    )
-
-    return {
-        "GOOGLE_SHEET_ID": sheet_id,
-        "GOOGLE_SHEETS_CREDENTIALS": creds_b64,
-    }
-
-
-# ─── Step 6: GitHub API key (optional) ───────────────────────────────────────
+# ─── Step 5: GitHub API key (optional) ───────────────────────────────────────
 
 def step_github():
-    section_header("Step 6 of 6 — GitHub API Key (Optional)")
+    section_header("Step 5 of 5 — GitHub API Key (Optional)")
 
     print(dim("  Used for GitHub search and tracking competitor release notes.\n"
               "  Without it, GitHub sources are skipped (other sources still work).\n"))
@@ -345,10 +309,6 @@ def print_summary(company, competitors, env_vars, config_path, env_path):
         configured.append("Slack (daily digest + DMs)")
     else:
         skipped.append("Slack")
-    if env_vars.get("GOOGLE_SHEET_ID"):
-        configured.append("Google Sheets (database)")
-    else:
-        skipped.append("Google Sheets")
     if env_vars.get("GH_API_KEY"):
         configured.append("GitHub (release tracking)")
     else:
@@ -362,13 +322,11 @@ def print_summary(company, competitors, env_vars, config_path, env_path):
     print(f"\n{CYAN}{BOLD}  Next steps:{RESET}\n")
     print(f"  1. {bold('Run the agent')} (daily data collection + AI synthesis):")
     print(f"     {green('python agent.py')}\n")
-    print(f"  2. {bold('Launch the Streamlit dashboard')} (requires Google Sheets):")
-    print(f"     {green('streamlit run app.py')}\n")
-    print(f"  3. {bold('Set up automated daily runs')} via GitHub Actions:")
+    print(f"  2. {bold('Set up automated daily runs')} via GitHub Actions:")
     print(f"     {dim('Add your .env values as repository secrets,')}")
     print(f"     {dim('then push to main — the workflow runs at 8 AM UTC by default.')}\n")
     if skipped:
-        print(f"  4. {bold('Add skipped integrations')} by editing {green('.env')} and re-running.\n")
+        print(f"  3. {bold('Add skipped integrations')} by editing {green('.env')} and re-running.\n")
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
@@ -397,13 +355,12 @@ def main():
         competitors = step_competitors()
         api_keys = step_api_keys()
         slack = step_slack()
-        sheets = step_google_sheets()
         github = step_github()
     except KeyboardInterrupt:
         print(f"\n\n  {red('Setup cancelled.')} Run {green('python onboard.py')} to start again.\n")
         sys.exit(0)
 
-    env_vars = {**api_keys, **slack, **sheets, **github}
+    env_vars = {**api_keys, **slack, **github}
 
     # Write config.json always
     config_path = write_config(company, competitors, base_dir)
